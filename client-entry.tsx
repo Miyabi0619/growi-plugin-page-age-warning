@@ -30,6 +30,11 @@ const CONFIG = {
 
   firstThresholdDays: 365,
   secondThresholdDays: 730,
+
+  ignoredPagePaths: [
+    '/',
+    '/Sidebar',
+  ],
 };
 
 function debugLog(...args: unknown[]): void {
@@ -44,6 +49,9 @@ let originalPushState: History['pushState'] | undefined;
 let originalReplaceState: History['replaceState'] | undefined;
 
 function isIgnoredPath(pathname: string): boolean {
+  const normalizedPath = pathname.replace(/\/+$/, '') || '/';
+  if (CONFIG.ignoredPagePaths.includes(normalizedPath)) return true;
+
   return /^\/(_api|admin|login|logout|me|trash|in-app-notification|installer)(\/|$)/.test(pathname);
 }
 
