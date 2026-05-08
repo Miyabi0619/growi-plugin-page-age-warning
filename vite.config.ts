@@ -2,9 +2,9 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   build: {
-    manifest: true,
+    manifest: 'manifest.json',
     rollupOptions: {
-      input: '/client-entry.ts',
+      input: ['/client-entry.ts'],
     },
   },
 });
