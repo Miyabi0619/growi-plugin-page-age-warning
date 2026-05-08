@@ -17,8 +17,8 @@ const MAX_RENDER_RETRIES = 20;
 
 const CONFIG = {
   // 'updatedAt' にすると「最終更新日」基準
-  // 'createdAt' にすると「投稿日」基準
-  dateField: 'updatedAt' as 'updatedAt' | 'createdAt',
+  // 'createdAt' にすると「作成日」基準
+  dateField: 'createdAt' as 'updatedAt' | 'createdAt',
 
   // 1年以内も青色で表示したいなら true
   showFreshMessage: false,
