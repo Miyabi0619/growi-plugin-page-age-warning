@@ -1,7 +1,7 @@
 {
     "name": "growi-plugin-page-age-warning",
     "version": "0.1.0",
-    "description": "Show a Qiita-like stale page warning based on updatedAt in GROWI",
+    "description": "GROWIでQiitaのような古いページに関する警告を表示する",
     "type": "module",
     "license": "MIT",
     "keywords": [
