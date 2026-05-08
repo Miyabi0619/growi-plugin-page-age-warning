@@ -1,0 +1,24 @@
+{
+    "name": "growi-plugin-page-age-warning",
+    "version": "0.1.0",
+    "description": "Show a Qiita-like stale page warning based on updatedAt in GROWI",
+    "type": "module",
+    "license": "MIT",
+    "keywords": [
+        "growi",
+        "growi-plugin"
+    ],
+    "scripts": {
+        "build": "tsc --noEmit && vite build"
+    },
+    "devDependencies": {
+        "typescript": "^5.6.0",
+        "vite": "^5.4.0"
+    },
+    "growiPlugin": {
+        "schemaVersion": "4",
+        "types": [
+            "script"
+        ]
+    }
+}
