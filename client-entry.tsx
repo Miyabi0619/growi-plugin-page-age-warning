@@ -13,6 +13,12 @@ type PageDate = {
   source: 'api' | 'dom';
 };
 
+type InsertPosition = {
+  parent: Element;
+  before: Node | null;
+  dateRoot: Element;
+};
+
 export {};
 
 const PLUGIN_NAME = 'growi-plugin-page-age-warning';
@@ -66,10 +72,12 @@ function ensureStyle(): void {
   style.id = 'growi-page-age-warning-style';
   style.textContent = `
     .growi-page-age-warning {
-      margin: 1rem 0;
+      margin: 1rem 0 1.25rem;
       padding: 0.8rem 1rem;
-      border-radius: 8px;
+      border-radius: 6px;
       border: 1px solid;
+      border-left-width: 4px;
+      color: inherit;
       font-size: 0.95rem;
       line-height: 1.6;
     }
@@ -79,19 +87,19 @@ function ensureStyle(): void {
       font-weight: 700;
     }
     .growi-page-age-warning.fresh {
-      color: #0d47a1;
-      background: #e3f2fd;
-      border-color: #90caf9;
+      background: rgba(66, 153, 225, 0.12);
+      border-color: rgba(66, 153, 225, 0.28);
+      border-left-color: rgba(66, 153, 225, 0.72);
     }
     .growi-page-age-warning.stale {
-      color: #6d4c00;
-      background: #fff8e1;
-      border-color: #ffe082;
+      background: rgba(180, 117, 25, 0.12);
+      border-color: rgba(180, 117, 25, 0.28);
+      border-left-color: rgba(180, 117, 25, 0.72);
     }
     .growi-page-age-warning.very-stale {
-      color: #7f1d1d;
-      background: #ffebee;
-      border-color: #ef9a9a;
+      background: rgba(185, 90, 83, 0.12);
+      border-color: rgba(185, 90, 83, 0.28);
+      border-left-color: rgba(185, 90, 83, 0.72);
     }
   `;
   document.head.appendChild(style);
@@ -101,7 +109,37 @@ function findPageRoot(): Element | null {
   return document.querySelector('main, [role="main"]');
 }
 
-function findInsertTarget(pageRoot: Element): Element | null {
+function isInsideSidebar(element: Element): boolean {
+  return element.closest('aside, nav, [id*="sidebar" i], [class*="sidebar" i], [data-testid*="sidebar" i]') != null;
+}
+
+function isVisible(element: Element): boolean {
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function findPageTitle(pageRoot: Element): Element | null {
+  const candidates = Array.from(pageRoot.querySelectorAll('[data-testid="page-title"], .grw-page-title, h1'));
+
+  return candidates.find((el) => !isInsideSidebar(el) && isVisible(el))
+    ?? candidates.find((el) => !isInsideSidebar(el))
+    ?? null;
+}
+
+function findInsertPosition(pageRoot: Element): InsertPosition | null {
+  const pageTitle = findPageTitle(pageRoot);
+  if (pageTitle != null) {
+    const titleBlock = pageTitle.closest('[data-testid="page-header"], .grw-page-header, .page-header, .grw-page-title-container, .page-title-container, header') ?? pageTitle;
+    const parent = titleBlock.parentElement;
+    if (parent != null) {
+      return {
+        parent,
+        before: titleBlock.nextSibling,
+        dateRoot: parent,
+      };
+    }
+  }
+
   const contentSelectors = [
     '.grw-page-content',
     '[data-testid="page-content"]',
@@ -114,14 +152,21 @@ function findInsertTarget(pageRoot: Element): Element | null {
   ];
 
   for (const selector of contentSelectors) {
-    const content = pageRoot.querySelector(selector);
+    const content = Array.from(pageRoot.querySelectorAll(selector)).find((el) => !isInsideSidebar(el));
     if (content != null) {
-      return content.parentElement ?? content;
+      return {
+        parent: content.parentElement ?? pageRoot,
+        before: content.parentElement == null ? pageRoot.firstChild : content,
+        dateRoot: content.parentElement ?? content,
+      };
     }
   }
 
-  const pageTitle = pageRoot.querySelector('h1, [data-testid="page-title"], .grw-page-title');
-  return pageTitle?.parentElement ?? pageRoot;
+  return {
+    parent: pageRoot,
+    before: pageRoot.firstChild,
+    dateRoot: pageRoot,
+  };
 }
 
 function formatDate(date: Date): string {
@@ -228,13 +273,13 @@ async function renderWarning(): Promise<boolean> {
   const pageRoot = findPageRoot();
   if (pageRoot == null) return false;
 
-  const target = findInsertTarget(pageRoot);
-  if (target == null) return false;
+  const insertPosition = findInsertPosition(pageRoot);
+  if (insertPosition == null) return false;
 
   removeBanner();
   ensureStyle();
 
-  const pageDate = (await getDateFromApi(pathname)) ?? getDateFromDocument(pageRoot);
+  const pageDate = (await getDateFromApi(pathname)) ?? getDateFromDocument(insertPosition.dateRoot);
   if (pageDate == null) {
     debugLog(`could not find ${CONFIG.dateField}`);
     return true;
@@ -256,7 +301,7 @@ async function renderWarning(): Promise<boolean> {
     <span>${message.body}</span>
   `;
 
-  target.prepend(banner);
+  insertPosition.parent.insertBefore(banner, insertPosition.before);
   return true;
 }
 
