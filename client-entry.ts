@@ -11,6 +11,9 @@ type GrowiPageResponse = {
 export {};
 
 const PLUGIN_NAME = 'growi-plugin-page-age-warning';
+const RENDER_DELAY_MS = 300;
+const RETRY_DELAY_MS = 500;
+const MAX_RENDER_RETRIES = 20;
 
 const CONFIG = {
   // 'updatedAt' にすると「最終更新日」基準
@@ -24,8 +27,11 @@ const CONFIG = {
   secondThresholdDays: 730,
 };
 
-let lastPath = '';
 let timer: number | undefined;
+let retryCount = 0;
+let isActive = false;
+let originalPushState: History['pushState'] | undefined;
+let originalReplaceState: History['replaceState'] | undefined;
 
 function isIgnoredPath(pathname: string): boolean {
   return /^\/(_api|admin|login|logout|me|trash|in-app-notification|installer)(\/|$)/.test(pathname);
@@ -74,12 +80,26 @@ function ensureStyle(): void {
 }
 
 function findInsertTarget(): Element | null {
-  return (
-    document.querySelector('.grw-page-content')?.parentElement ??
-    document.querySelector('.wiki')?.parentElement ??
-    document.querySelector('main') ??
-    null
-  );
+  const contentSelectors = [
+    '.grw-page-content',
+    '[data-testid="page-content"]',
+    '.page-content',
+    '.page-content-preview',
+    '.revision-body',
+    '.markdown-body',
+    '.markdown-preview',
+    '.wiki',
+  ];
+
+  for (const selector of contentSelectors) {
+    const content = document.querySelector(selector);
+    if (content != null) {
+      return content.parentElement ?? content;
+    }
+  }
+
+  const pageTitle = document.querySelector('main h1, [data-testid="page-title"], .grw-page-title');
+  return pageTitle?.parentElement ?? document.querySelector('main') ?? null;
 }
 
 function formatDate(date: Date): string {
@@ -118,16 +138,16 @@ function buildMessage(days: number, date: Date): { className: string; title: str
   };
 }
 
-async function renderWarning(): Promise<void> {
+async function renderWarning(): Promise<boolean> {
   const pathname = decodeURIComponent(window.location.pathname);
 
   if (isIgnoredPath(pathname)) {
     removeBanner();
-    return;
+    return true;
   }
 
   const target = findInsertTarget();
-  if (target == null) return;
+  if (target == null) return false;
 
   removeBanner();
   ensureStyle();
@@ -139,20 +159,29 @@ async function renderWarning(): Promise<void> {
     credentials: 'same-origin',
   });
 
-  if (!res.ok) return;
+  if (!res.ok) {
+    console.debug(`[${PLUGIN_NAME}] failed to fetch page data`, res.status, res.statusText);
+    return true;
+  }
 
   const data = (await res.json()) as GrowiPageResponse;
   const page = data.page ?? data;
 
   const rawDate = page[CONFIG.dateField];
-  if (rawDate == null) return;
+  if (rawDate == null) {
+    console.debug(`[${PLUGIN_NAME}] ${CONFIG.dateField} is missing in page data`);
+    return true;
+  }
 
   const date = new Date(rawDate);
-  if (Number.isNaN(date.getTime())) return;
+  if (Number.isNaN(date.getTime())) {
+    console.debug(`[${PLUGIN_NAME}] ${CONFIG.dateField} is invalid`, rawDate);
+    return true;
+  }
 
   const days = Math.floor((Date.now() - date.getTime()) / 86_400_000);
   const message = buildMessage(days, date);
-  if (message == null) return;
+  if (message == null) return true;
 
   const banner = document.createElement('div');
   banner.className = `growi-page-age-warning ${message.className}`;
@@ -162,44 +191,81 @@ async function renderWarning(): Promise<void> {
   `;
 
   target.prepend(banner);
+  return true;
 }
 
 function scheduleRender(): void {
   window.clearTimeout(timer);
   timer = window.setTimeout(() => {
-    const pathname = window.location.pathname;
-    if (pathname === lastPath) return;
+    renderWarning()
+      .then((completed) => {
+        if (completed) {
+          retryCount = 0;
+          return;
+        }
 
-    lastPath = pathname;
-    renderWarning().catch((err) => {
-      console.debug(`[${PLUGIN_NAME}] failed to render warning`, err);
-    });
-  }, 300);
+        if (!isActive || retryCount >= MAX_RENDER_RETRIES) {
+          console.debug(`[${PLUGIN_NAME}] insert target was not found`);
+          retryCount = 0;
+          return;
+        }
+
+        retryCount += 1;
+        window.setTimeout(scheduleRender, RETRY_DELAY_MS);
+      })
+      .catch((err) => {
+        retryCount = 0;
+        console.debug(`[${PLUGIN_NAME}] failed to render warning`, err);
+      });
+  }, RENDER_DELAY_MS);
 }
 
 function activate(): void {
-  lastPath = '';
+  if (isActive) return;
+
+  isActive = true;
+  retryCount = 0;
   scheduleRender();
 
-  const originalPushState = history.pushState;
-  const originalReplaceState = history.replaceState;
+  originalPushState = history.pushState;
+  originalReplaceState = history.replaceState;
 
   history.pushState = function (...args) {
-    originalPushState.apply(this, args);
+    originalPushState?.apply(this, args);
+    retryCount = 0;
     scheduleRender();
   };
 
   history.replaceState = function (...args) {
-    originalReplaceState.apply(this, args);
+    originalReplaceState?.apply(this, args);
+    retryCount = 0;
     scheduleRender();
   };
 
-  window.addEventListener('popstate', scheduleRender);
+  window.addEventListener('popstate', handleNavigation);
 }
 
 function deactivate(): void {
+  isActive = false;
+  retryCount = 0;
+  window.clearTimeout(timer);
   removeBanner();
-  window.removeEventListener('popstate', scheduleRender);
+  window.removeEventListener('popstate', handleNavigation);
+
+  if (originalPushState != null) {
+    history.pushState = originalPushState;
+    originalPushState = undefined;
+  }
+
+  if (originalReplaceState != null) {
+    history.replaceState = originalReplaceState;
+    originalReplaceState = undefined;
+  }
+}
+
+function handleNavigation(): void {
+  retryCount = 0;
+  scheduleRender();
 }
 
 declare global {
