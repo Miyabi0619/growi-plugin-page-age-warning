@@ -132,10 +132,6 @@ function ensureStyle(): void {
   document.head.appendChild(style);
 }
 
-function findPageRoot(): Element | null {
-  return document.querySelector('main, [role="main"]');
-}
-
 function isInsideSidebar(element: Element): boolean {
   return element.closest(SIDEBAR_SELECTOR) != null;
 }
@@ -145,12 +141,45 @@ function isVisible(element: Element): boolean {
   return rect.width > 0 && rect.height > 0;
 }
 
-function findPageTitle(pageRoot: Element): Element | null {
-  const candidates = Array.from(pageRoot.querySelectorAll('[data-testid="page-title"], .grw-page-title, h1'));
+function findPageRoot(): Element | null {
+  const rootSelectors = [
+    'main',
+    '[role="main"]',
+    '.grw-page-wrapper',
+    '.grw-page',
+    '.page-wrapper',
+    '.page-content-wrapper',
+    '#page-wrapper',
+    '#page',
+  ];
 
-  return candidates.find((el) => !isInsideSidebar(el) && isVisible(el))
-    ?? candidates.find((el) => !isInsideSidebar(el))
-    ?? null;
+  for (const selector of rootSelectors) {
+    const root = document.querySelector(selector);
+    if (root != null && isVisible(root) && !isInsideSidebar(root)) {
+      return root;
+    }
+  }
+
+  return document.body;
+}
+
+function findPageTitle(pageRoot: Element): Element | null {
+  const candidates = Array.from(pageRoot.querySelectorAll('[data-testid="page-title"], .grw-page-title, h1'))
+    .filter((el) => !isInsideSidebar(el));
+
+  const visibleCandidates = candidates
+    .filter(isVisible)
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+      const selectorScore = el.matches('[data-testid="page-title"], .grw-page-title') ? 100 : 0;
+      return {
+        el,
+        score: selectorScore + rect.left + rect.width / 10,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return visibleCandidates[0]?.el ?? candidates[0] ?? null;
 }
 
 function findInsertPosition(pageRoot: Element): InsertPosition | null {
