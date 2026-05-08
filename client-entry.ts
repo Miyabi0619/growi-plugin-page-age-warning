@@ -8,6 +8,11 @@ type GrowiPageResponse = {
   createdAt?: string;
 };
 
+type PageDate = {
+  date: Date;
+  source: 'api' | 'dom';
+};
+
 export {};
 
 const PLUGIN_NAME = 'growi-plugin-page-age-warning';
@@ -26,6 +31,11 @@ const CONFIG = {
   firstThresholdDays: 365,
   secondThresholdDays: 730,
 };
+
+function debugLog(...args: unknown[]): void {
+  if (window.localStorage.getItem(`${PLUGIN_NAME}:debug`) !== 'true') return;
+  console.info(`[${PLUGIN_NAME}]`, ...args);
+}
 
 let timer: number | undefined;
 let retryCount = 0;
@@ -110,6 +120,63 @@ function formatDate(date: Date): string {
   }).format(date);
 }
 
+function parseLocalDateTime(value: string): Date | null {
+  const match = value.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2}))?/);
+  if (match == null) return null;
+
+  const [, year, month, day, hour = '0', minute = '0'] = match;
+  const date = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+  );
+
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getDateFromDocument(): PageDate | null {
+  const label = CONFIG.dateField === 'updatedAt' ? '最終更新日' : '作成日';
+  const text = document.body.textContent?.replace(/\s+/g, ' ') ?? '';
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = text.match(new RegExp(`${escapedLabel}\\s+(\\d{4}/\\d{1,2}/\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2})?)`));
+  if (match == null) return null;
+
+  const date = parseLocalDateTime(match[1]);
+  return date == null ? null : { date, source: 'dom' };
+}
+
+async function getDateFromApi(pathname: string): Promise<PageDate | null> {
+  const params = new URLSearchParams({ path: pathname });
+
+  const res = await fetch(`/_api/v3/page?${params.toString()}`, {
+    method: 'GET',
+    credentials: 'same-origin',
+  });
+
+  if (!res.ok) {
+    debugLog('failed to fetch page data', res.status, res.statusText);
+    return null;
+  }
+
+  const data = (await res.json()) as GrowiPageResponse;
+  const page = data.page ?? data;
+  const rawDate = page[CONFIG.dateField];
+  if (rawDate == null) {
+    debugLog(`${CONFIG.dateField} is missing in page data`, data);
+    return null;
+  }
+
+  const date = new Date(rawDate);
+  if (Number.isNaN(date.getTime())) {
+    debugLog(`${CONFIG.dateField} is invalid`, rawDate);
+    return null;
+  }
+
+  return { date, source: 'api' };
+}
+
 function buildMessage(days: number, date: Date): { className: string; title: string; body: string } | null {
   const fieldLabel = CONFIG.dateField === 'updatedAt' ? '最終更新' : '作成';
 
@@ -152,36 +219,20 @@ async function renderWarning(): Promise<boolean> {
   removeBanner();
   ensureStyle();
 
-  const params = new URLSearchParams({ path: pathname });
-
-  const res = await fetch(`/_api/v3/page?${params.toString()}`, {
-    method: 'GET',
-    credentials: 'same-origin',
-  });
-
-  if (!res.ok) {
-    console.debug(`[${PLUGIN_NAME}] failed to fetch page data`, res.status, res.statusText);
+  const pageDate = (await getDateFromApi(pathname)) ?? getDateFromDocument();
+  if (pageDate == null) {
+    debugLog(`could not find ${CONFIG.dateField}`);
     return true;
   }
 
-  const data = (await res.json()) as GrowiPageResponse;
-  const page = data.page ?? data;
+  const days = Math.floor((Date.now() - pageDate.date.getTime()) / 86_400_000);
+  debugLog('date resolved', { field: CONFIG.dateField, source: pageDate.source, date: pageDate.date.toISOString(), days });
 
-  const rawDate = page[CONFIG.dateField];
-  if (rawDate == null) {
-    console.debug(`[${PLUGIN_NAME}] ${CONFIG.dateField} is missing in page data`);
+  const message = buildMessage(days, pageDate.date);
+  if (message == null) {
+    debugLog('message hidden because page age is under threshold', days);
     return true;
   }
-
-  const date = new Date(rawDate);
-  if (Number.isNaN(date.getTime())) {
-    console.debug(`[${PLUGIN_NAME}] ${CONFIG.dateField} is invalid`, rawDate);
-    return true;
-  }
-
-  const days = Math.floor((Date.now() - date.getTime()) / 86_400_000);
-  const message = buildMessage(days, date);
-  if (message == null) return true;
 
   const banner = document.createElement('div');
   banner.className = `growi-page-age-warning ${message.className}`;
