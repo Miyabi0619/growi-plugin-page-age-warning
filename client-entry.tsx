@@ -97,7 +97,11 @@ function ensureStyle(): void {
   document.head.appendChild(style);
 }
 
-function findInsertTarget(): Element | null {
+function findPageRoot(): Element | null {
+  return document.querySelector('main, [role="main"]');
+}
+
+function findInsertTarget(pageRoot: Element): Element | null {
   const contentSelectors = [
     '.grw-page-content',
     '[data-testid="page-content"]',
@@ -110,14 +114,14 @@ function findInsertTarget(): Element | null {
   ];
 
   for (const selector of contentSelectors) {
-    const content = document.querySelector(selector);
+    const content = pageRoot.querySelector(selector);
     if (content != null) {
       return content.parentElement ?? content;
     }
   }
 
-  const pageTitle = document.querySelector('main h1, [data-testid="page-title"], .grw-page-title');
-  return pageTitle?.parentElement ?? document.querySelector('main') ?? null;
+  const pageTitle = pageRoot.querySelector('h1, [data-testid="page-title"], .grw-page-title');
+  return pageTitle?.parentElement ?? pageRoot;
 }
 
 function formatDate(date: Date): string {
@@ -144,9 +148,9 @@ function parseLocalDateTime(value: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function getDateFromDocument(): PageDate | null {
+function getDateFromDocument(pageRoot: Element): PageDate | null {
   const label = CONFIG.dateField === 'updatedAt' ? '最終更新日' : '作成日';
-  const text = document.body.textContent?.replace(/\s+/g, ' ') ?? '';
+  const text = pageRoot.textContent?.replace(/\s+/g, ' ') ?? '';
   const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = text.match(new RegExp(`${escapedLabel}\\s+(\\d{4}/\\d{1,2}/\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2})?)`));
   if (match == null) return null;
@@ -221,13 +225,16 @@ async function renderWarning(): Promise<boolean> {
     return true;
   }
 
-  const target = findInsertTarget();
+  const pageRoot = findPageRoot();
+  if (pageRoot == null) return false;
+
+  const target = findInsertTarget(pageRoot);
   if (target == null) return false;
 
   removeBanner();
   ensureStyle();
 
-  const pageDate = (await getDateFromApi(pathname)) ?? getDateFromDocument();
+  const pageDate = (await getDateFromApi(pathname)) ?? getDateFromDocument(pageRoot);
   if (pageDate == null) {
     debugLog(`could not find ${CONFIG.dateField}`);
     return true;
