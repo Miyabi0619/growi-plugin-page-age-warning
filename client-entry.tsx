@@ -16,7 +16,6 @@ type PageDate = {
 type InsertPosition = {
   parent: Element;
   before: Node | null;
-  dateRoot: Element;
 };
 
 export {};
@@ -135,7 +134,6 @@ function findInsertPosition(pageRoot: Element): InsertPosition | null {
       return {
         parent,
         before: titleBlock.nextSibling,
-        dateRoot: parent,
       };
     }
   }
@@ -157,7 +155,6 @@ function findInsertPosition(pageRoot: Element): InsertPosition | null {
       return {
         parent: content.parentElement ?? pageRoot,
         before: content.parentElement == null ? pageRoot.firstChild : content,
-        dateRoot: content.parentElement ?? content,
       };
     }
   }
@@ -165,7 +162,6 @@ function findInsertPosition(pageRoot: Element): InsertPosition | null {
   return {
     parent: pageRoot,
     before: pageRoot.firstChild,
-    dateRoot: pageRoot,
   };
 }
 
@@ -193,9 +189,18 @@ function parseLocalDateTime(value: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function getTextWithoutSidebar(pageRoot: Element): string {
+  const clonedPageRoot = pageRoot.cloneNode(true) as Element;
+  clonedPageRoot
+    .querySelectorAll('aside, nav, [id*="sidebar" i], [class*="sidebar" i], [data-testid*="sidebar" i]')
+    .forEach((el) => el.remove());
+
+  return clonedPageRoot.textContent?.replace(/\s+/g, ' ') ?? '';
+}
+
 function getDateFromDocument(pageRoot: Element): PageDate | null {
   const label = CONFIG.dateField === 'updatedAt' ? '最終更新日' : '作成日';
-  const text = pageRoot.textContent?.replace(/\s+/g, ' ') ?? '';
+  const text = getTextWithoutSidebar(pageRoot);
   const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = text.match(new RegExp(`${escapedLabel}\\s+(\\d{4}/\\d{1,2}/\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2})?)`));
   if (match == null) return null;
@@ -279,7 +284,7 @@ async function renderWarning(): Promise<boolean> {
   removeBanner();
   ensureStyle();
 
-  const pageDate = (await getDateFromApi(pathname)) ?? getDateFromDocument(insertPosition.dateRoot);
+  const pageDate = (await getDateFromApi(pathname)) ?? getDateFromDocument(pageRoot);
   if (pageDate == null) {
     debugLog(`could not find ${CONFIG.dateField}`);
     return true;
