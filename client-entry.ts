@@ -8,6 +8,8 @@ type GrowiPageResponse = {
   createdAt?: string;
 };
 
+export {};
+
 const PLUGIN_NAME = 'growi-plugin-page-age-warning';
 
 const CONFIG = {
