@@ -43,6 +43,15 @@ const SIDEBAR_SELECTOR = [
   '[data-testid="custom-sidebar"]',
   '[data-testid="sidebar"]',
 ].join(',');
+const SECONDARY_PANEL_SELECTOR = [
+  SIDEBAR_SELECTOR,
+  '[class~="toc"]',
+  '[class~="grw-toc"]',
+  '[class~="page-tags"]',
+  '[data-testid*="toc" i]',
+  '[aria-label*="目次"]',
+  '[aria-label*="table of contents" i]',
+].join(',');
 
 const CONFIG = {
   // 'updatedAt' にすると「最終更新日」基準
@@ -133,7 +142,7 @@ function ensureStyle(): void {
 }
 
 function isInsideSidebar(element: Element): boolean {
-  return element.closest(SIDEBAR_SELECTOR) != null;
+  return element.closest(SECONDARY_PANEL_SELECTOR) != null;
 }
 
 function isVisible(element: Element): boolean {
@@ -182,7 +191,51 @@ function findPageTitle(pageRoot: Element): Element | null {
   return visibleCandidates[0]?.el ?? candidates[0] ?? null;
 }
 
+function findContentElement(pageRoot: Element): Element | null {
+  const contentSelectors = [
+    '.markdown-body',
+    '.markdown-preview',
+    '.wiki',
+    '.revision-body',
+    '[data-testid="page-content"]',
+    '.grw-page-content',
+    '.page-content-preview',
+    '.page-content',
+  ];
+
+  const candidates = contentSelectors.flatMap((selector, index) => (
+    Array.from(pageRoot.querySelectorAll(selector)).map((el) => ({ el, index }))
+  ));
+
+  const visibleCandidates = candidates
+    .filter(({ el }) => isVisible(el) && !isInsideSidebar(el))
+    .map(({ el, index }) => {
+      const rect = el.getBoundingClientRect();
+      const textLength = el.textContent?.trim().length ?? 0;
+      return {
+        el,
+        score: (contentSelectors.length - index) * 10_000
+          + rect.width * rect.height
+          + Math.min(textLength, 10_000)
+          + rect.left,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return visibleCandidates[0]?.el
+    ?? candidates.find(({ el }) => !isInsideSidebar(el))?.el
+    ?? null;
+}
+
 function findInsertPosition(pageRoot: Element): InsertPosition | null {
+  const content = findContentElement(pageRoot);
+  if (content != null) {
+    return {
+      parent: content,
+      before: content.firstChild,
+    };
+  }
+
   const pageTitle = findPageTitle(pageRoot);
   if (pageTitle != null) {
     const titleBlock = pageTitle.closest('[data-testid="page-header"], .grw-page-header, .page-header, .grw-page-title-container, .page-title-container, header') ?? pageTitle;
@@ -191,27 +244,6 @@ function findInsertPosition(pageRoot: Element): InsertPosition | null {
       return {
         parent,
         before: titleBlock.nextSibling,
-      };
-    }
-  }
-
-  const contentSelectors = [
-    '.grw-page-content',
-    '[data-testid="page-content"]',
-    '.page-content',
-    '.page-content-preview',
-    '.revision-body',
-    '.markdown-body',
-    '.markdown-preview',
-    '.wiki',
-  ];
-
-  for (const selector of contentSelectors) {
-    const content = Array.from(pageRoot.querySelectorAll(selector)).find((el) => !isInsideSidebar(el));
-    if (content != null) {
-      return {
-        parent: content.parentElement ?? pageRoot,
-        before: content.parentElement == null ? pageRoot.firstChild : content,
       };
     }
   }
