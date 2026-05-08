@@ -211,16 +211,18 @@ function findContentElement(pageRoot: Element): Element | null {
     .filter(({ el }) => isVisible(el) && !isInsideSidebar(el))
     .map(({ el, index }) => {
       const rect = el.getBoundingClientRect();
-      const textLength = el.textContent?.trim().length ?? 0;
       return {
         el,
-        score: (contentSelectors.length - index) * 10_000
-          + rect.width * rect.height
-          + Math.min(textLength, 10_000)
-          + rect.left,
+        selectorPriority: contentSelectors.length - index,
+        top: rect.top,
+        left: rect.left,
       };
     })
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => (
+      b.selectorPriority - a.selectorPriority
+      || a.top - b.top
+      || b.left - a.left
+    ));
 
   return visibleCandidates[0]?.el
     ?? candidates.find(({ el }) => !isInsideSidebar(el))?.el
