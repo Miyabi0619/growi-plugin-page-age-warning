@@ -3,9 +3,14 @@ type GrowiPageResponse = {
     path?: string;
     updatedAt?: string;
     createdAt?: string;
+    isEmpty?: boolean;
+    wip?: boolean;
   };
+  path?: string;
   updatedAt?: string;
   createdAt?: string;
+  isEmpty?: boolean;
+  wip?: boolean;
 };
 
 type PageDate = {
@@ -24,6 +29,20 @@ const PLUGIN_NAME = 'growi-plugin-page-age-warning';
 const RENDER_DELAY_MS = 300;
 const RETRY_DELAY_MS = 500;
 const MAX_RENDER_RETRIES = 20;
+const SIDEBAR_SELECTOR = [
+  'aside',
+  'nav[aria-label*="sidebar" i]',
+  '[id="grw-sidebar"]',
+  '[id="grw-custom-sidebar"]',
+  '[id="custom-sidebar"]',
+  '[class~="grw-sidebar"]',
+  '[class~="grw-sidebar-content"]',
+  '[class~="grw-custom-sidebar"]',
+  '[class~="custom-sidebar"]',
+  '[data-testid="grw-sidebar"]',
+  '[data-testid="custom-sidebar"]',
+  '[data-testid="sidebar"]',
+].join(',');
 
 const CONFIG = {
   // 'updatedAt' にすると「最終更新日」基準
@@ -40,6 +59,10 @@ const CONFIG = {
     '/',
     '/Sidebar',
   ],
+
+  ignoredPagePathPatterns: [
+    /(^|\/)__?Template(\/|$)/,
+  ],
 };
 
 function debugLog(...args: unknown[]): void {
@@ -53,11 +76,16 @@ let isActive = false;
 let originalPushState: History['pushState'] | undefined;
 let originalReplaceState: History['replaceState'] | undefined;
 
-function isIgnoredPath(pathname: string): boolean {
-  const normalizedPath = pathname.replace(/\/+$/, '') || '/';
-  if (CONFIG.ignoredPagePaths.includes(normalizedPath)) return true;
+function normalizePagePath(pathname: string): string {
+  return pathname.replace(/\/+$/, '') || '/';
+}
 
-  return /^\/(_api|admin|login|logout|me|trash|in-app-notification|installer)(\/|$)/.test(pathname);
+function isIgnoredPath(pathname: string): boolean {
+  const normalizedPath = normalizePagePath(pathname);
+  if (CONFIG.ignoredPagePaths.includes(normalizedPath)) return true;
+  if (CONFIG.ignoredPagePathPatterns.some((pattern) => pattern.test(normalizedPath))) return true;
+
+  return /^\/(_api|admin|login|logout|me|trash|in-app-notification|installer|search|tags)(\/|$)/.test(normalizedPath);
 }
 
 function removeBanner(): void {
@@ -109,7 +137,7 @@ function findPageRoot(): Element | null {
 }
 
 function isInsideSidebar(element: Element): boolean {
-  return element.closest('aside, nav, [id*="sidebar" i], [class*="sidebar" i], [data-testid*="sidebar" i]') != null;
+  return element.closest(SIDEBAR_SELECTOR) != null;
 }
 
 function isVisible(element: Element): boolean {
@@ -192,7 +220,7 @@ function parseLocalDateTime(value: string): Date | null {
 function getTextWithoutSidebar(pageRoot: Element): string {
   const clonedPageRoot = pageRoot.cloneNode(true) as Element;
   clonedPageRoot
-    .querySelectorAll('aside, nav, [id*="sidebar" i], [class*="sidebar" i], [data-testid*="sidebar" i]')
+    .querySelectorAll(SIDEBAR_SELECTOR)
     .forEach((el) => el.remove());
 
   return clonedPageRoot.textContent?.replace(/\s+/g, ' ') ?? '';
@@ -210,33 +238,49 @@ function getDateFromDocument(pageRoot: Element): PageDate | null {
 }
 
 async function getDateFromApi(pathname: string): Promise<PageDate | null> {
-  const params = new URLSearchParams({ path: pathname });
+  try {
+    const params = new URLSearchParams({ path: pathname });
 
-  const res = await fetch(`/_api/v3/page?${params.toString()}`, {
-    method: 'GET',
-    credentials: 'same-origin',
-  });
+    const res = await fetch(`/_api/v3/page?${params.toString()}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+    });
 
-  if (!res.ok) {
-    debugLog('failed to fetch page data', res.status, res.statusText);
+    if (!res.ok) {
+      debugLog('failed to fetch page data', res.status, res.statusText);
+      return null;
+    }
+
+    const data = (await res.json()) as GrowiPageResponse;
+    const page = data.page ?? data;
+    if (page.path != null && normalizePagePath(page.path) !== normalizePagePath(pathname)) {
+      debugLog('page path mismatch', { requested: pathname, actual: page.path });
+      return null;
+    }
+
+    const rawDate = page[CONFIG.dateField];
+    if (rawDate == null) {
+      debugLog(`${CONFIG.dateField} is missing in page data`, data);
+      return null;
+    }
+
+    const date = new Date(rawDate);
+    if (Number.isNaN(date.getTime())) {
+      debugLog(`${CONFIG.dateField} is invalid`, rawDate);
+      return null;
+    }
+
+    return { date, source: 'api' };
+  }
+  catch (err) {
+    debugLog('failed to fetch page data', err);
     return null;
   }
+}
 
-  const data = (await res.json()) as GrowiPageResponse;
-  const page = data.page ?? data;
-  const rawDate = page[CONFIG.dateField];
-  if (rawDate == null) {
-    debugLog(`${CONFIG.dateField} is missing in page data`, data);
-    return null;
-  }
-
-  const date = new Date(rawDate);
-  if (Number.isNaN(date.getTime())) {
-    debugLog(`${CONFIG.dateField} is invalid`, rawDate);
-    return null;
-  }
-
-  return { date, source: 'api' };
+async function resolvePageDate(pathname: string, pageRoot: Element): Promise<PageDate | null> {
+  const apiDate = await getDateFromApi(pathname);
+  return apiDate ?? getDateFromDocument(pageRoot);
 }
 
 function buildMessage(days: number, date: Date): { className: string; title: string; body: string } | null {
@@ -284,7 +328,7 @@ async function renderWarning(): Promise<boolean> {
   removeBanner();
   ensureStyle();
 
-  const pageDate = (await getDateFromApi(pathname)) ?? getDateFromDocument(pageRoot);
+  const pageDate = await resolvePageDate(pathname, pageRoot);
   if (pageDate == null) {
     debugLog(`could not find ${CONFIG.dateField}`);
     return true;
