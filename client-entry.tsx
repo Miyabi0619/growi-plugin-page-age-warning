@@ -1,16 +1,23 @@
-type GrowiPageResponse = {
-  page?: {
-    path?: string;
-    updatedAt?: string;
-    createdAt?: string;
-    isEmpty?: boolean;
-    wip?: boolean;
-  };
+type GrowiPageData = {
   path?: string;
   updatedAt?: string;
   createdAt?: string;
   isEmpty?: boolean;
   wip?: boolean;
+};
+
+type GrowiPageResponse = {
+  page?: GrowiPageData;
+} & GrowiPageData;
+
+type GrowiNextData = {
+  props?: {
+    pageProps?: {
+      pageWithMeta?: {
+        data?: GrowiPageData;
+      };
+    };
+  };
 };
 
 type PageDate = {
@@ -290,14 +297,61 @@ function getTextWithoutSidebar(pageRoot: Element): string {
 }
 
 function getDateFromDocument(pageRoot: Element): PageDate | null {
+  // Footer text: "最終更新日 yyyy/mm/dd hh:mm by ..."
   const label = CONFIG.dateField === 'updatedAt' ? '最終更新日' : '作成日';
   const text = getTextWithoutSidebar(pageRoot);
   const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = text.match(new RegExp(`${escapedLabel}\\s+(\\d{4}/\\d{1,2}/\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2})?)`));
-  if (match == null) return null;
+  if (match != null) {
+    const date = parseLocalDateTime(match[1]);
+    if (date != null) return { date, source: 'dom' };
+  }
 
-  const date = parseLocalDateTime(match[1]);
-  return date == null ? null : { date, source: 'dom' };
+  // pageSide: ".grw-author-info" containing "最終更新者:" / "作成者:", sibling ".text-date"
+  const authorLabel = CONFIG.dateField === 'updatedAt' ? '最終更新者' : '作成者';
+  for (const info of Array.from(document.querySelectorAll('.grw-author-info'))) {
+    if (isInsideSidebar(info)) continue;
+    if (!info.textContent?.includes(authorLabel)) continue;
+    const dateEl = info.querySelector('.text-date');
+    if (dateEl == null) continue;
+    const raw = dateEl.textContent?.trim() ?? '';
+    const date = parseLocalDateTime(raw.replace(/\//g, '/'));
+    if (date != null) return { date, source: 'dom' };
+  }
+
+  return null;
+}
+
+function getDateFromNextData(pathname: string): PageDate | null {
+  try {
+    const nextData = (window as unknown as { __NEXT_DATA__?: GrowiNextData }).__NEXT_DATA__;
+    const pageData = nextData?.props?.pageProps?.pageWithMeta?.data;
+    if (pageData == null) return null;
+
+    if (pageData.path != null && normalizePagePath(pageData.path) !== normalizePagePath(pathname)) {
+      debugLog('__NEXT_DATA__ path mismatch', { current: pathname, data: pageData.path });
+      return null;
+    }
+
+    const rawDate = pageData[CONFIG.dateField];
+    if (rawDate == null) {
+      debugLog(`${CONFIG.dateField} is missing in __NEXT_DATA__`);
+      return null;
+    }
+
+    const date = new Date(rawDate);
+    if (Number.isNaN(date.getTime())) {
+      debugLog(`${CONFIG.dateField} is invalid in __NEXT_DATA__`, rawDate);
+      return null;
+    }
+
+    debugLog('date resolved from __NEXT_DATA__', { field: CONFIG.dateField, date: date.toISOString() });
+    return { date, source: 'api' };
+  }
+  catch (err) {
+    debugLog('failed to read __NEXT_DATA__', err);
+    return null;
+  }
 }
 
 async function getDateFromApi(pathname: string): Promise<PageDate | null> {
@@ -342,8 +396,9 @@ async function getDateFromApi(pathname: string): Promise<PageDate | null> {
 }
 
 async function resolvePageDate(pathname: string, pageRoot: Element): Promise<PageDate | null> {
-  const apiDate = await getDateFromApi(pathname);
-  return apiDate ?? getDateFromDocument(pageRoot);
+  return getDateFromNextData(pathname)
+    ?? await getDateFromApi(pathname)
+    ?? getDateFromDocument(pageRoot);
 }
 
 function buildMessage(days: number, date: Date): { className: string; title: string; body: string } | null {
